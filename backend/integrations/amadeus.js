@@ -56,7 +56,7 @@ async function fetchAccessToken() {
   return cachedToken;
 }
 
-async function searchFlightOffers({ origin, destination, departDate, returnDate, adults = 1 }) {
+async function searchFlightOffers({ origin, destination, departDate, returnDate, adults = 1, airline }) {
   const token = await fetchAccessToken();
   const url = new URL(`${AMADEUS_BASE}/v2/shopping/flight-offers`);
   url.searchParams.set('originLocationCode', origin);
@@ -66,6 +66,9 @@ async function searchFlightOffers({ origin, destination, departDate, returnDate,
   url.searchParams.set('adults', String(adults));
   url.searchParams.set('currencyCode', 'USD');
   url.searchParams.set('max', '50');
+  if (airline && typeof airline === 'string' && airline.trim().length > 0) {
+    url.searchParams.set('includedAirlineCodes', airline.trim().toUpperCase());
+  }
 
   console.log('[Amadeus] Request', {
     env: AMADEUS_ENV,
@@ -74,6 +77,7 @@ async function searchFlightOffers({ origin, destination, departDate, returnDate,
     departDate,
     returnDate,
     adults,
+    airline: airline || null,
     url: url.toString(),
   });
 
@@ -241,4 +245,70 @@ async function priceFlightOffer(offer) {
   };
 }
 
-module.exports = { searchFlightOffers, searchFlightOffersWithFlex, transformOfferToDetails, priceFlightOffer, computeOfferUID }; 
+function sanitizeKeyword(input) {
+  if (!input) return '';
+  // Keep letters, numbers, and spaces; collapse multiple spaces; uppercase; trim
+  const cleaned = String(input)
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+  return cleaned;
+}
+
+async function searchLocations(keyword) {
+  const token = await fetchAccessToken();
+  const q = sanitizeKeyword(keyword);
+  if (!q || q.length < 2) {
+    return [];
+  }
+  const url = new URL(`${AMADEUS_BASE}/v1/reference-data/locations`);
+  url.searchParams.set('subType', 'CITY,AIRPORT');
+  url.searchParams.set('keyword', q);
+  url.searchParams.set('page[limit]', '20');
+
+  console.log('[Amadeus] Locations request', url.toString());
+  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    const text = await res.text();
+    console.warn('[Amadeus] Locations error', res.status, text?.slice(0, 300));
+    // Rate limit or bad input: return empty gracefully
+    if (res.status === 400 || res.status === 429) return [];
+    throw new Error(`Amadeus locations failed: ${res.status} ${text}`);
+  }
+  const json = await res.json();
+  const data = json.data || [];
+  return data.map((item) => ({
+    id: item.id,
+    iataCode: item.iataCode,
+    name: item.name,
+    subType: item.subType,
+    address: item.address || {},
+  }));
+}
+
+function sanitizeAirlineCode(input) {
+  if (!input) return '';
+  return String(input).replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, 3);
+}
+
+async function searchAirlines(query) {
+  const token = await fetchAccessToken();
+  const code = sanitizeAirlineCode(query);
+  if (!code || code.length < 2) return [];
+  const url = new URL(`${AMADEUS_BASE}/v1/reference-data/airlines`);
+  url.searchParams.set('airlineCodes', code);
+  console.log('[Amadeus] Airlines request', url.toString());
+  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    const text = await res.text();
+    console.warn('[Amadeus] Airlines error', res.status, text?.slice(0, 300));
+    if (res.status === 400 || res.status === 429) return [];
+    throw new Error(`Amadeus airlines failed: ${res.status} ${text}`);
+  }
+  const json = await res.json();
+  const data = json.data || [];
+  return data.map((a) => ({ code: a.iataCode, name: a.businessName || a.commonName || a.legalName || '' }));
+}
+
+module.exports = { searchFlightOffers, searchFlightOffersWithFlex, transformOfferToDetails, priceFlightOffer, computeOfferUID, searchLocations, searchAirlines }; 

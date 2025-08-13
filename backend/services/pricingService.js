@@ -7,6 +7,7 @@ async function fetchAllPrices(params) {
 		try {
 			const { offers, carriers } = await searchFlightOffersWithFlex(params);
 
+			const selectedCarrier = (params.airline || '').toUpperCase();
 			const offersByCarrier = new Map();
 
 			for (const offer of offers) {
@@ -17,6 +18,10 @@ async function fetchAllPrices(params) {
 						if (segment.carrierCode) carriersInOffer.add(segment.carrierCode);
 						if (segment.marketingCarrier) carriersInOffer.add(segment.marketingCarrier);
 					}
+				}
+				// If a carrier is selected, skip offers that do not include it
+				if (selectedCarrier && !carriersInOffer.has(selectedCarrier)) {
+					continue;
 				}
 				for (const code of carriersInOffer) {
 					if (!offersByCarrier.has(code)) offersByCarrier.set(code, []);

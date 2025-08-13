@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Container,
@@ -13,6 +13,7 @@ import {
   IconButton,
   Stack,
   Divider,
+  Autocomplete,
 } from '@mui/material';
 import { Delete as DeleteIcon, Refresh as RefreshIcon, Add as AddIcon } from '@mui/icons-material';
 import axios from 'axios';
@@ -83,15 +84,31 @@ function ItineraryDetails({ offer }) {
 function FlightSearch({ onAddWatch }) {
   const [depart, setDepart] = useState(dayjs().add(30, 'day').format('YYYY-MM-DD'));
   const [ret, setRet] = useState(dayjs().add(44, 'day').format('YYYY-MM-DD'));
+  const [destination, setDestination] = useState({ code: 'DXB', label: 'DXB — Dubai' });
+  const [destOptions, setDestOptions] = useState([]);
+  const [destLoading, setDestLoading] = useState(false);
+  const [destQuery, setDestQuery] = useState('');
+  const destCacheRef = useRef(new Map());
   const [grouped, setGrouped] = useState({});
   const [loading, setLoading] = useState(false);
+  const [airlineQuery, setAirlineQuery] = useState('');
+  const [airlineOptions, setAirlineOptions] = useState([]);
+  const [airline, setAirline] = useState(null);
+  const [airlineLoading, setAirlineLoading] = useState(false);
 
   const handleSearch = async () => {
     setLoading(true);
     try {
-      const { data } = await axios.get(`${API_BASE}/flights/search`, {
-        params: { origin: 'CLT', destination: 'DXB', depart, return: ret },
-      });
+      const destCode = (destination?.code || (destQuery && destQuery.trim().toUpperCase())) || '';
+      if (!destCode) {
+        alert('Please type a destination (city or airport code)');
+        setLoading(false);
+        return;
+      }
+      const airlineCode = (airline?.code || (airlineQuery && airlineQuery.trim().toUpperCase())) || '';
+      const params = { origin: 'CLT', destination: destCode, depart, return: ret };
+      if (airlineCode) params.airline = airlineCode;
+      const { data } = await axios.get(`${API_BASE}/flights/search`, { params });
       setGrouped(data.grouped || {});
     } catch (e) {
       console.error(e);
@@ -100,6 +117,73 @@ function FlightSearch({ onAddWatch }) {
       setLoading(false);
     }
   };
+
+  const fetchDestinations = async (q) => {
+    if (!q || q.length < 3) {
+      setDestOptions([]);
+      return;
+    }
+    // Cache hit
+    const cached = destCacheRef.current.get(q.toLowerCase());
+    if (cached) {
+      setDestOptions(cached);
+      return;
+    }
+    setDestLoading(true);
+    try {
+      const { data } = await axios.get(`${API_BASE}/flights/locations`, { params: { q } });
+      const options = data.map((d) => ({
+        code: d.iataCode,
+        label: `${d.iataCode} — ${d.name}${d.address?.cityName ? ', ' + d.address.cityName : ''}`,
+        raw: d,
+      }));
+      setDestOptions(options);
+      destCacheRef.current.set(q.toLowerCase(), options);
+    } catch (e) {
+      // Swallow rate limit errors and keep current options
+      console.warn('Destination lookup error:', e?.response?.status || e?.message);
+    } finally {
+      setDestLoading(false);
+    }
+  };
+
+  const fetchAirlines = async (q) => {
+    const code = (q || '').replace(/[^a-zA-Z]/g, '').toUpperCase();
+    if (!code || code.length < 2) {
+      setAirlineOptions([]);
+      return;
+    }
+    setAirlineLoading(true);
+    try {
+      const { data } = await axios.get(`${API_BASE}/flights/airlines`, { params: { q: code } });
+      setAirlineOptions(data.map((a) => ({ code: a.code, label: `${a.code} — ${a.name || ''}` })));
+    } catch (e) {
+      console.warn('Airlines lookup error:', e?.response?.status || e?.message);
+    } finally {
+      setAirlineLoading(false);
+    }
+  };
+
+  // Debounce destination lookups
+  useEffect(() => {
+    if (!destQuery || destQuery.length < 3) {
+      setDestOptions([]);
+      return;
+    }
+    const id = setTimeout(() => {
+      fetchDestinations(destQuery);
+    }, 500);
+    return () => clearTimeout(id);
+  }, [destQuery]);
+
+  useEffect(() => {
+    if (!airlineQuery || airlineQuery.length < 2) {
+      setAirlineOptions([]);
+      return;
+    }
+    const id = setTimeout(() => fetchAirlines(airlineQuery), 400);
+    return () => clearTimeout(id);
+  }, [airlineQuery]);
 
   const confirmAndWatch = async (offer) => {
     try {
@@ -110,11 +194,12 @@ function FlightSearch({ onAddWatch }) {
         taxes: data.taxes,
         grandTotal: data.grandTotal,
       };
+      const destCode = (destination?.code || (destQuery && destQuery.trim().toUpperCase())) || 'DEST';
       await onAddWatch({
         airline: offer.airline,
-        flightNumber: `${offer.code} CLT-DXB`,
+        flightNumber: `${offer.code} CLT-${destCode}`,
         origin: 'CLT',
-        destination: 'DXB',
+        destination: destCode,
         departDate: offer.departDate,
         returnDate: offer.returnDate,
         price: Math.round(Number(data.grandTotal || offer.price || 0)),
@@ -139,9 +224,9 @@ function FlightSearch({ onAddWatch }) {
   return (
     <Card sx={{ mb: 3 }}>
       <CardContent>
-        <Typography variant="h6">Search CLT ⇄ DXB Roundtrip</Typography>
+        <Typography variant="h6">Search CLT ⇄ Destination Roundtrip</Typography>
         <Grid container spacing={2} sx={{ mt: 1 }}>
-          <Grid item xs={12} sm={6}>
+          <Grid item xs={12} md={4}>
             <TextField
               label="Depart"
               type="date"
@@ -151,7 +236,7 @@ function FlightSearch({ onAddWatch }) {
               InputLabelProps={{ shrink: true }}
             />
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid item xs={12} md={4}>
             <TextField
               label="Return"
               type="date"
@@ -159,6 +244,34 @@ function FlightSearch({ onAddWatch }) {
               onChange={(e) => setRet(e.target.value)}
               fullWidth
               InputLabelProps={{ shrink: true }}
+            />
+          </Grid>
+          <Grid item xs={12} md={4}>
+            <Autocomplete
+              fullWidth
+              options={destOptions}
+              value={destination}
+              loading={destLoading}
+              freeSolo
+              inputValue={destQuery}
+              onChange={(_e, val) => setDestination(val)}
+              onInputChange={(_e, val) => setDestQuery(val)}
+              getOptionLabel={(opt) => opt?.label || ''}
+              renderInput={(params) => <TextField {...params} label="Destination (City or Airport)" placeholder="Type e.g. Dubai or DXB" />}
+            />
+          </Grid>
+          <Grid item xs={12} md={4}>
+            <Autocomplete
+              fullWidth
+              options={airlineOptions}
+              value={airline}
+              loading={airlineLoading}
+              freeSolo
+              inputValue={airlineQuery}
+              onChange={(_e, val) => setAirline(val)}
+              onInputChange={(_e, val) => setAirlineQuery(val)}
+              getOptionLabel={(opt) => opt?.label || ''}
+              renderInput={(params) => <TextField {...params} label="Airline code (optional)" placeholder="Type e.g. EK, QR, AA" />}
             />
           </Grid>
         </Grid>
@@ -189,12 +302,13 @@ function FlightSearch({ onAddWatch }) {
                         <Button
                           size="small"
                           startIcon={<AddIcon />}
-                          onClick={() =>
+                          onClick={() => {
+                            const destCode = (destination?.code || (destQuery && destQuery.trim().toUpperCase())) || 'DEST';
                             onAddWatch({
                               airline: r.airline,
-                              flightNumber: `${r.code} CLT-DXB`,
+                              flightNumber: `${r.code} CLT-${destCode}`,
                               origin: 'CLT',
-                              destination: 'DXB',
+                              destination: destCode,
                               departDate: depart,
                               returnDate: ret,
                               price: r.price ?? 0,
@@ -203,7 +317,7 @@ function FlightSearch({ onAddWatch }) {
                               amadeusOfferId: r.offerId || r.raw?.id || null,
                               amadeusOffer: r.raw || null,
                             })
-                          }
+                          }}
                         >
                           Watch
                         </Button>
@@ -348,7 +462,7 @@ export default function App() {
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
       <Typography variant="h4" gutterBottom>
-        CLT ⇄ DXB Flight Price Watcher
+        Flight Price Watcher
       </Typography>
       <Watchlist />
     </Container>
