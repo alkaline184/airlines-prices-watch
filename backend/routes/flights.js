@@ -52,7 +52,7 @@ router.get('/search', async (req, res) => {
     for (const r of results) {
       const key = r.code || r.airline;
       if (!grouped[key]) grouped[key] = [];
-      if (grouped[key].length < 5) grouped[key].push(r);
+      if (grouped[key].length < 4) grouped[key].push(r);
     }
 
     res.json({ origin, destination, departDate, returnDate, adults, airline: airline || null, results, grouped });

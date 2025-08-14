@@ -42,8 +42,8 @@ async function fetchAllPrices(params) {
 
 			const results = [];
 			for (const [code, list] of offersByCarrier.entries()) {
-				const top5 = list.sort((a, b) => a.price - b.price).slice(0, 5);
-				results.push(...top5);
+				const topN = list.sort((a, b) => a.price - b.price).slice(0, 4);
+				results.push(...topN);
 			}
 			if (results.length > 0) {
 				return results.sort((a, b) => a.price - b.price);
